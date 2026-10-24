@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<!-- satmap-template-version: 2.0.4 -->
+<html>
+<head>
+    <title>uNmINeD</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+
+    <!-- OpenLayers 依赖 -->
+    <link rel="stylesheet" type="text/css" href="lib/ol.css">
+    <script src="lib/ol.js"></script>
+
+    <!-- 右键菜单 -->
+    <link href="lib/ol-contextmenu.css" rel="stylesheet">
+    <script src="lib/ol-contextmenu.iife.js"></script>
+
+    <!-- Toastify 通知 -->
+    <script src="lib/toastify-js.js"></script>
+    <link rel="stylesheet" href="lib/toastify-js.min.css">
+
+    <!-- uNmINeD 生成的静态数据 -->
+    <script src="unmined.map.properties.js"></script>
+    <script src="unmined.map.regions.js"></script>
+    <script src="unmined.map.players.js"></script>
+
+    <!-- 自定义标记（由插件生成） -->
+    <script src="custom.markers.js"></script>
+
+    <!-- uNmINeD 主逻辑 -->
+    <script src="unmined.js"></script>
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+    <div id="map"></div>
+
+    <script>
+        // ============================================================
+        // 以下三个常量由 satmap 插件在渲染完成后自动注入，请勿手改
+        // （每次渲染都会用本模板覆盖 uNmINeD 生成的 index.html）
+        // ============================================================
+        const MAP_DIMENSION = '__MAP_DIMENSION__';  // 维度过滤器：只显示该维度的玩家
+        const PLAYERS_JSON  = '__PLAYERS_JSON__';   // 实时玩家数据（相对本页）
+        const REFRESH_MS    = __REFRESH_MS__;       // 刷新间隔（毫秒）
+        const MAP_TITLE     = '__MAP_TITLE__';      // 为空则沿用 uNmINeD 的世界名
+        // ============================================================
+
+        // 可选：覆盖地图标题
+        try {
+            if (MAP_TITLE && typeof UnminedMapProperties !== 'undefined') {
+                UnminedMapProperties.worldName = MAP_TITLE;
+            }
+        } catch (e) {}
+
+        // 设置页面标题
+        try {
+            document.title = UnminedMapProperties.worldName + " - " + document.title;
+        } catch (e) {}
+
+        // 加载自定义标记（插件生成的 custom.markers.js）
+        if (typeof UnminedCustomMarkers !== 'undefined' && UnminedCustomMarkers &&
+            UnminedCustomMarkers.isEnabled && UnminedCustomMarkers.markers &&
+            typeof UnminedMapProperties !== 'undefined') {
+            UnminedMapProperties.markers = UnminedMapProperties.markers.concat(UnminedCustomMarkers.markers);
+        }
+
+        // 初始静态玩家标记（uNmINeD 渲染时写入的，可能为空，仅作降级）
+        if (typeof UnminedPlayers !== 'undefined' && UnminedPlayers && UnminedPlayers.length > 0) {
+            UnminedMapProperties.playerMarkers = Unmined.createPlayerMarkers(UnminedPlayers);
+        }
+
+        const mapElement = document.getElementById('map');
+
+        // 暴露全局 unmined 对象，供动态更新使用
+        window.unmined = new Unmined(mapElement, UnminedMapProperties, UnminedRegions);
+
+        // ==================== 动态玩家更新（仅显示当前维度玩家） ====================
+        (function () {
+            // 玩家标记样式（与 unmined.js 默认玩家样式一致）
+            const playerStyle = {
+                image: "playerimages/default.png",
+                imageAnchor: [0.5, 0.5],
+                imageScale: 0.25,
+                textColor: "white",
+                offsetX: 0,
+                offsetY: 20,
+                font: "14px Arial",
+                textBackgroundColor: "#00000088",
+                textPadding: [2, 4, 2, 4]
+            };
+
+            function normalizeDim(v) {
+                return String(v || '').toLowerCase().replace(/^minecraft:/, '');
+            }
+
+            function updatePlayers() {
+                const unmined = window.unmined;
+                if (!unmined) return;
+
+                fetch(PLAYERS_JSON + '?t=' + Date.now(), { cache: 'no-store' })
+                    .then(function (response) {
+                        if (!response.ok) throw new Error('HTTP ' + response.status);
+                        return response.json();
+                    })
+                    .then(function (playersData) {
+                        // ----- 维度过滤：只保留 MAP_DIMENSION 指定的维度 -----
+                        const markers = Object.keys(playersData).reduce(function (acc, name) {
+                            const data = playersData[name] || {};
+                            if (normalizeDim(data.dim) === MAP_DIMENSION) {
+                                acc.push(Object.assign({
+                                    x: data.x,
+                                    z: data.z,
+                                    text: name
+                                }, playerStyle));
+                            }
+                            return acc;
+                        }, []);
+
+                        // 移除旧的玩家图层
+                        if (unmined.playerMarkersLayer) {
+                            unmined.olMap.removeLayer(unmined.playerMarkersLayer);
+                        }
+
+                        // 创建新图层（即使没有玩家也创建空图层，避免报错）
+                        const newLayer = unmined.createMarkersLayer(markers);
+                        newLayer.setZIndex(1001); // 置于最上层
+                        unmined.playerMarkersLayer = newLayer;
+                        unmined.olMap.addLayer(newLayer);
+                    })
+                    .catch(function (err) {
+                        console.warn('[卫星地图] 玩家数据加载失败:', err);
+                    });
+            }
+
+            // 首次更新（等待地图完全加载）
+            setTimeout(updatePlayers, 1500);
+            // 定时刷新
+            setInterval(updatePlayers, REFRESH_MS);
+        })();
+    </script>
+</body>
+</html>
